@@ -37,7 +37,7 @@
 
   tasks:
     - name: Gather facts
-      ansible.builtin.setup:
+      setup:
 
     - name: Add Observe repository
       shell: echo 'deb [trusted=yes] https://repo.observeinc.com/apt/ /' | sudo tee /etc/apt/sources.list.d/observeinc.list
@@ -52,55 +52,70 @@
         state: present
 
     - name: Copy custom otel-collector.yaml for Ubuntu 24.04
-      copy:
-        src: /home/svc-ansible/repos/infrastructure-linux/Ansible/playbooks/files/observe/24.04-otel-collector.yaml
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/files/observe/24.04-otel-collector.yaml"
         dest: /etc/observe-agent/otel-collector.yaml
         owner: root
         group: root
         mode: '0644'
-      when: ansible_facts['os_family'] == 'Debian' and ansible_facts['distribution_version'] == '24.04'
+      when:
+        - ansible_facts['os_family'] == 'Debian'
+        - ansible_facts['distribution_version'] == '24.04'
 
     - name: Copy custom logs.yaml for Ubuntu 24.04
-      copy:
-        src: /home/svc-ansible/repos/infrastructure-linux/Ansible/playbooks/files/observe/24.04-logs.yaml
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/files/observe/24.04-logs.yaml"
         dest: /etc/observe-agent/connections/host_monitoring/logs.yaml
         owner: root
         group: root
         mode: '0644'
-      when: ansible_facts['os_family'] == 'Debian' and ansible_facts['distribution_version'] == '24.04'
+      when:
+        - ansible_os_family == 'Debian'
+        - ansible_distribution_version == '24.04'
 
     - name: Copy default otel-collector.yaml for other OS versions
-      copy:
-        src: /home/svc-ansible/repos/infrastructure-linux/Ansible/playbooks/files/observe/otel-collector.yaml
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/files/observe/otel-collector.yaml"
         dest: /etc/observe-agent/otel-collector.yaml
         owner: root
         group: root
         mode: '0644'
-      when: ansible_facts['os_family'] == 'Debian' and ansible_facts['distribution_version'] != '24.04'
+      when:
+        - ansible_os_family == 'Debian'
+        - ansible_distribution_version != '24.04'
 
     - name: Copy default logs.yaml for other OS versions
-      copy:
-        src: /home/svc-ansible/repos/infrastructure-linux/Ansible/playbooks/files/observe/logs.yaml
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/files/observe/logs.yaml"
         dest: /etc/observe-agent/connections/host_monitoring/logs.yaml
         owner: root
         group: root
         mode: '0644'
-      when: ansible_facts['os_family'] == 'Debian' and ansible_facts['distribution_version'] != '24.04'
+      when:
+        - ansible_os_family == 'Debian'
+        - ansible_distribution_version != '24.04'
 
     - name: Initialize Observe agent configuration
       command: >
-        observe-agent init-config --token {{ token }} --observe_url {{ url }} --self_monitoring::enabled=true --host_monitoring::enabled=true --host_monitoring::logs::enabled=true --host_monitoring::metrics::host::enabled=true --host_monitoring::metrics::process::enabled=true
+        observe-agent init-config
+          --token "{{ observe_token }}"
+          --observe_url "{{ observe_url }}"
+          --self_monitoring enabled=true
+          --host_monitoring enabled=true
+          --host_monitoring_logs enabled=true
+          --host_monitoring_metrics_host enabled=true
+          --host_monitoring_metrics_process enabled=true
 
     - name: Remove specific log file inclusions from Observe agent configuration
       replace:
         path: /etc/observe-agent/observe-agent.yaml
-        regexp: '^\s*- /var/log/\*\*/\*.log$'
+        regexp: '^{{ " " }}- /var/log/.*/.*\\.log$'
         replace: ''
 
     - name: Remove syslog inclusion from Observe agent configuration
       replace:
         path: /etc/observe-agent/observe-agent.yaml
-        regexp: '^\s*- /var/log/syslog$'
+        regexp: '{{ " " }}- /var/log/syslog$'
         replace: ''
 
     - name: Start and enable Observe agent service

@@ -10,6 +10,7 @@ This repository is a collection of Ansible playbooks I’ve written to automate 
    cd ansible-playbooks
 2. Update the inventory file with your server details
 3. Run a playbook
+    ```bash
     ansible-playbook -i inventory <playbook-name>.yml
 
 ## License

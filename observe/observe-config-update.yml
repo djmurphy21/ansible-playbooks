@@ -1,0 +1,91 @@
+---
+# Synopsis
+# This playbook manages the observe-agent service on all target hosts by stopping the service, updating configuration files, restarting the service, and validating its status.
+
+# Description
+# The playbook performs the following tasks:
+# 1. Stops the observe-agent service to safely apply configuration changes.
+# 2. Copies the custom otel-collector configuration file to the specified directory on the target host.
+# 3. Copies the custom logs configuration file to the specified directory on the target host.
+# 4. Restarts the observe-agent service to apply the new configurations.
+# 5. Ensures the observe-agent service is running and enabled to start at boot.
+
+# Notes
+# - Verify that configuration file paths are correct and accessible.
+# - Ensure the observe-agent service is installed and configured correctly on all target hosts.
+# - Adjust file permissions and ownership as needed to match your environment.
+
+# Example
+# To run this playbook, execute:
+# ansible-playbook -i <inventory_file> <playbook.yml> --limit <hostname_or_group>
+#
+# Replace `<inventory_file>` with the path to your inventory file and `<playbook.yml>` with the name of this playbook.
+
+- name: Update Observe configuration
+  hosts: all
+  become: true
+
+  tasks:
+  - name: Stop Observe Agent Service
+    service:
+      name: observe-agent
+      state: stopped
+
+  - name: Gather facts
+    setup:
+
+  - name: Copy custom otel-collector.yaml for Ubuntu 24.04
+    copy:
+      src: "{{ role_path }}/files/observe/{{ os_version }}-otel-collector.yaml"
+      dest: /etc/observe-agent/otel-collector.yaml
+      owner: root
+      group: root
+      mode: '0644'
+    when:
+      - ansible_os_family == 'Debian'
+      - os_version == '24.04'
+
+  - name: Copy custom logs.yaml for Ubuntu 24.04
+    copy:
+      src: "{{ role_path }}/files/observe/{{ os_version }}-logs.yaml"
+      dest: /etc/observe-agent/connections/host_monitoring/logs.yaml
+      owner: root
+      group: root
+      mode: '0644'
+    when:
+      - ansible_os_family == 'Debian'
+      - os_version == '24.04'
+
+  - name: Copy default otel-collector.yaml for other OS versions
+    copy:
+      src: "{{ role_path }}/files/observe/otel-collector.yaml"
+      dest: /etc/observe-agent/otel-collector.yaml
+      owner: root
+      group: root
+      mode: '0644'
+    when:
+      - ansible_os_family == 'Debian'
+      - os_version != '24.04'
+
+  - name: Copy default logs.yaml for other OS versions
+    copy:
+      src: "{{ role_path }}/files/observe/logs.yaml"
+      dest: /etc/observe-agent/connections/host_monitoring/logs.yaml
+      owner: root
+      group: root
+      mode: '0644'
+    when:
+      - ansible_os_family == 'Debian'
+      - os_version != '24.04'
+
+  - name: Start observe-agent service
+    ansible.builtin.service:
+      name: observe-agent
+      state: started
+
+  - name: Ensure observe-agent service is running and enabled
+    ansible.builtin.systemd:
+      name: observe-agent
+      state: started
+      enabled: yes
+

@@ -1,0 +1,114 @@
+---
+# Synopsis:
+# This Ansible playbook automates the installation and configuration of the Observe agent on all specified hosts.
+# It ensures the agent is properly set up to monitor the host system and send telemetry data to the Observe platform.
+
+# Description:
+# The playbook performs the following tasks:
+# 1. Add Observe Repository: Adds the Observe repository to the system's package manager to allow installation of the Observe agent.
+# 2. Update Apt Cache: Updates the package manager's cache to include the newly added repository.
+# 3. Install Observe Agent: Installs the Observe agent package from the repository.
+# 4. Copy Custom Configuration: Copies custom configurations for otel-collector.yaml and logs.yaml to appropriate directories on the host.
+# 5. Initialize Configuration: Initializes the Observe agent configuration using provided tokens and URLs, enabling various monitoring features.
+# 6. Remove Specific Log File Inclusions: Removes specific log file inclusions from the Observe agent configuration.
+# 7. Remove Syslog Inclusion: Removes syslog inclusion from the Observe agent configuration.
+# 8. Start and Enable Service: Starts the Observe agent service and ensures it is enabled to start on boot.
+# 9. Pin Observe Agent Version: Pins the Observe agent version to prevent automatic updates.
+
+# Notes:
+# - Variables: The playbook uses variables defined in an external file specified by `vars_file`. Ensure this file contains necessary variables such as `token` and `url`.
+# - Permissions: The playbook requires elevated privileges (`become: yes`) to perform tasks such as adding repositories, installing packages, and modifying system files.
+# - Custom Configuration: The custom `otel-collector.yaml` and `logs.yaml` files should be prepared and placed in specified source paths before running the playbook.
+# - Service Management: The playbook uses the `systemd` module to manage the Observe agent service, ensuring it is started and enabled to run on system boot.
+
+# Example:
+# To run this playbook, use the following command:
+# ansible-playbook -i <inventory_file> <playbook.yml> --extra-vars "vars_file=<path_to_vars_file>" --limit <hostname_or_group_name>
+#
+# Replace `<inventory_file>` with the path to your inventory file, `<playbook.yml>` with the name of this playbook file,
+# `<path_to_vars_file>` with the path to your variables file, `<hostname_or_group_name>` with the target hostname or group name.
+
+- name: Install and Configure Observe Agent
+  hosts: all
+  become: yes
+
+  vars_files:
+    - "{{ vars_file }}"
+
+  tasks:
+    - name: Gather facts
+      ansible.builtin.setup:
+
+    - name: Add Observe repository
+      shell: echo 'deb [trusted=yes] https://repo.observeinc.com/apt/ /' | sudo tee /etc/apt/sources.list.d/observeinc.list
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install Observe agent
+      apt:
+        name: observe-agent
+        state: present
+
+    - name: Copy custom otel-collector.yaml for Ubuntu 24.04
+      copy:
+        src: /home/svc-ansible/repos/infrastructure-linux/Ansible/playbooks/files/observe/24.04-otel-collector.yaml
+        dest: /etc/observe-agent/otel-collector.yaml
+        owner: root
+        group: root
+        mode: '0644'
+      when: ansible_facts['os_family'] == 'Debian' and ansible_facts['distribution_version'] == '24.04'
+
+    - name: Copy custom logs.yaml for Ubuntu 24.04
+      copy:
+        src: /home/svc-ansible/repos/infrastructure-linux/Ansible/playbooks/files/observe/24.04-logs.yaml
+        dest: /etc/observe-agent/connections/host_monitoring/logs.yaml
+        owner: root
+        group: root
+        mode: '0644'
+      when: ansible_facts['os_family'] == 'Debian' and ansible_facts['distribution_version'] == '24.04'
+
+    - name: Copy default otel-collector.yaml for other OS versions
+      copy:
+        src: /home/svc-ansible/repos/infrastructure-linux/Ansible/playbooks/files/observe/otel-collector.yaml
+        dest: /etc/observe-agent/otel-collector.yaml
+        owner: root
+        group: root
+        mode: '0644'
+      when: ansible_facts['os_family'] == 'Debian' and ansible_facts['distribution_version'] != '24.04'
+
+    - name: Copy default logs.yaml for other OS versions
+      copy:
+        src: /home/svc-ansible/repos/infrastructure-linux/Ansible/playbooks/files/observe/logs.yaml
+        dest: /etc/observe-agent/connections/host_monitoring/logs.yaml
+        owner: root
+        group: root
+        mode: '0644'
+      when: ansible_facts['os_family'] == 'Debian' and ansible_facts['distribution_version'] != '24.04'
+
+    - name: Initialize Observe agent configuration
+      command: >
+        observe-agent init-config --token {{ token }} --observe_url {{ url }} --self_monitoring::enabled=true --host_monitoring::enabled=true --host_monitoring::logs::enabled=true --host_monitoring::metrics::host::enabled=true --host_monitoring::metrics::process::enabled=true
+
+    - name: Remove specific log file inclusions from Observe agent configuration
+      replace:
+        path: /etc/observe-agent/observe-agent.yaml
+        regexp: '^\s*- /var/log/\*\*/\*.log$'
+        replace: ''
+
+    - name: Remove syslog inclusion from Observe agent configuration
+      replace:
+        path: /etc/observe-agent/observe-agent.yaml
+        regexp: '^\s*- /var/log/syslog$'
+        replace: ''
+
+    - name: Start and enable Observe agent service
+      systemd:
+        name: observe-agent
+        enabled: yes
+        state: started
+
+    - name: Pin Observe Agent Version
+      shell: sudo apt-mark hold observe-agent
+

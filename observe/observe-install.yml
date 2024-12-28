@@ -35,95 +35,150 @@
   vars_files:
     - "{{ vars_file }}"
 
+  vars:
+    observe_repo_url: "https://repo.observeinc.com/apt/"
+    observe_agent_service: observe-agent
+    observe_config_dir: /etc/observe-agent
+    observe_logs_dir: "{{ observe_config_dir }}/connections/host_monitoring"
+    file_owner: root
+    file_group: root
+    file_mode: '0644'
+
+  pre_tasks:
+    - name: Check if required variables are defined
+      assert:
+        that:
+          - observe_token is defined
+          - observe_url is defined
+        msg: "Required variables 'observe_token' and 'observe_url' must be defined in vars file"
+
+    - name: Check if configuration files exist
+      stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ playbook_dir }}/files/observe/{% if ansible_distribution_version == '24.04' %}24.04-{% endif %}otel-collector.yaml"
+        - "{{ playbook_dir }}/files/observe/{% if ansible_distribution_version == '24.04' %}24.04-{% endif %}logs.yaml"
+      register: config_files
+      failed_when: not config_files.stat.exists
+      delegate_to: localhost
+
   tasks:
     - name: Gather facts
       setup:
 
     - name: Add Observe repository
-      shell: echo 'deb [trusted=yes] https://repo.observeinc.com/apt/ /' | sudo tee /etc/apt/sources.list.d/observeinc.list
+      apt_repository:
+        repo: "deb [trusted=yes] {{ observe_repo_url }} /"
+        state: present
+        filename: observeinc
+      register: repo_add
 
     - name: Update apt cache
       apt:
         update_cache: yes
+      when: repo_add is changed
 
     - name: Install Observe agent
       apt:
-        name: observe-agent
+        name: "{{ observe_agent_service }}"
         state: present
+      register: install_status
 
-    - name: Copy custom otel-collector.yaml for Ubuntu 24.04
-      ansible.builtin.copy:
-        src: "{{ playbook_dir }}/files/observe/24.04-otel-collector.yaml"
-        dest: /etc/observe-agent/otel-collector.yaml
-        owner: root
-        group: root
-        mode: '0644'
-      when:
-        - ansible_facts['os_family'] == 'Debian'
-        - ansible_facts['distribution_version'] == '24.04'
+    - name: Create required directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ file_owner }}"
+        group: "{{ file_group }}"
+        mode: "{{ file_mode }}"
+      loop:
+        - "{{ observe_config_dir }}"
+        - "{{ observe_logs_dir }}"
 
-    - name: Copy custom logs.yaml for Ubuntu 24.04
-      ansible.builtin.copy:
-        src: "{{ playbook_dir }}/files/observe/24.04-logs.yaml"
-        dest: /etc/observe-agent/connections/host_monitoring/logs.yaml
-        owner: root
-        group: root
-        mode: '0644'
-      when:
-        - ansible_os_family == 'Debian'
-        - ansible_distribution_version == '24.04'
+    - name: Backup existing configuration files
+      copy:
+        src: "{{ item }}"
+        dest: "{{ item }}.backup-{{ ansible_date_time.date }}"
+        remote_src: yes
+      loop:
+        - "{{ observe_config_dir }}/otel-collector.yaml"
+        - "{{ observe_logs_dir }}/logs.yaml"
+      ignore_errors: yes
+      when: install_status is changed
 
-    - name: Copy default otel-collector.yaml for other OS versions
-      ansible.builtin.copy:
-        src: "{{ playbook_dir }}/files/observe/otel-collector.yaml"
-        dest: /etc/observe-agent/otel-collector.yaml
-        owner: root
-        group: root
-        mode: '0644'
-      when:
-        - ansible_os_family == 'Debian'
-        - ansible_distribution_version != '24.04'
-
-    - name: Copy default logs.yaml for other OS versions
-      ansible.builtin.copy:
-        src: "{{ playbook_dir }}/files/observe/logs.yaml"
-        dest: /etc/observe-agent/connections/host_monitoring/logs.yaml
-        owner: root
-        group: root
-        mode: '0644'
-      when:
-        - ansible_os_family == 'Debian'
-        - ansible_distribution_version != '24.04'
+    - name: Copy configuration files
+      copy:
+        src: "{{ playbook_dir }}/files/observe/{% if ansible_distribution_version == '24.04' %}24.04-{% endif %}{{ item.name }}"
+        dest: "{{ item.dest }}"
+        owner: "{{ file_owner }}"
+        group: "{{ file_group }}"
+        mode: "{{ file_mode }}"
+        validate: 'python -c "import yaml; yaml.safe_load(open(\"%s\", \"r\").read())"'
+      loop:
+        - { name: "otel-collector.yaml", dest: "{{ observe_config_dir }}/otel-collector.yaml" }
+        - { name: "logs.yaml", dest: "{{ observe_logs_dir }}/logs.yaml" }
+      when: ansible_os_family == 'Debian'
+      register: config_copy
 
     - name: Initialize Observe agent configuration
-      command: >
-        observe-agent init-config
-          --token "{{ observe_token }}"
-          --observe_url "{{ observe_url }}"
-          --self_monitoring enabled=true
-          --host_monitoring enabled=true
-          --host_monitoring_logs enabled=true
-          --host_monitoring_metrics_host enabled=true
-          --host_monitoring_metrics_process enabled=true
+      command: observe-agent init-config
+        --token "{{ observe_token }}"
+        --observe_url "{{ observe_url }}"
+        --self_monitoring enabled=true
+        --host_monitoring enabled=true
+        --host_monitoring_logs enabled=true
+        --host_monitoring_metrics_host enabled=true
+        --host_monitoring_metrics_process enabled=true
+      register: init_config
+      changed_when: init_config.rc == 0
+      failed_when: init_config.rc != 0
+      no_log: true  # Hide sensitive token information from logs
 
-    - name: Remove specific log file inclusions from Observe agent configuration
-      replace:
+    - name: Configure log exclusions
+      blockinfile:
         path: /etc/observe-agent/observe-agent.yaml
-        regexp: '^{{ " " }}- /var/log/.*/.*\\.log$'
-        replace: ''
-
-    - name: Remove syslog inclusion from Observe agent configuration
-      replace:
-        path: /etc/observe-agent/observe-agent.yaml
-        regexp: '{{ " " }}- /var/log/syslog$'
-        replace: ''
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - LOG EXCLUSIONS"
+        block: |
+          # Excluding specific log patterns
+          log_exclusions:
+            - pattern: '/var/log/.*/.*\.log'
+            - pattern: '/var/log/syslog'
+        backup: yes
 
     - name: Start and enable Observe agent service
       systemd:
-        name: observe-agent
-        enabled: yes
+        name: "{{ observe_agent_service }}"
         state: started
+        enabled: yes
+        daemon_reload: yes
+      register: service_status
+
+    - name: Verify service is running
+      systemd:
+        name: "{{ observe_agent_service }}"
+      register: service_check
+      failed_when: service_check.status.ActiveState != "active"
 
     - name: Pin Observe Agent Version
-      shell: sudo apt-mark hold observe-agent
+      dpkg_selections:
+        name: "{{ observe_agent_service }}"
+        selection: hold
+      register: pin_status
 
+    - name: Show installation status
+      debug:
+        msg: "Observe agent installation completed successfully. Service status: {{ service_check.status.ActiveState }}"
+
+  handlers:
+    - name: Restore configuration on failure
+      copy:
+        src: "{{ item }}.backup-{{ ansible_date_time.date }}"
+        dest: "{{ item }}"
+        remote_src: yes
+      loop:
+        - "{{ observe_config_dir }}/otel-collector.yaml"
+        - "{{ observe_logs_dir }}/logs.yaml"
+      when: (config_copy.failed is defined and config_copy.failed) or
+            (init_config.failed is defined and init_config.failed) or
+            (service_status.failed is defined and service_status.failed)
+      ignore_errors: yes

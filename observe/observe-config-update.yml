@@ -25,104 +25,93 @@
   hosts: all
   become: true
 
-  vars:
-    observe_agent_service: observe-agent
-    observe_config_dir: /etc/observe-agent
-    observe_logs_dir: "{{ observe_config_dir }}/connections/host_monitoring"
-    file_owner: root
-    file_group: root
-    file_mode: '0644'
-
-  pre_tasks:
-    - name: Verify observe-agent service exists
-      stat:
-        path: /etc/systemd/system/{{ observe_agent_service }}.service
-      register: service_status
-      failed_when: not service_status.stat.exists
-      
-    - name: Verify configuration directories exist
-      stat:
-        path: "{{ item }}"
-      loop:
-        - "{{ observe_config_dir }}"
-        - "{{ observe_logs_dir }}"
-      register: dir_check
-      failed_when: not dir_check.stat.exists
-
   tasks:
-    - name: Stop Observe Agent Service
-      service:
-        name: "{{ observe_agent_service }}"
-        state: stopped
-      register: service_stop
-      failed_when: 
-        - service_stop.failed is defined
-        - service_stop.failed
+  # Stop the observe-agent service to safely apply configuration changes.
+  - name: Stop Observe Agent Service
+    service:
+      name: observe-agent
+      state: stopped
+    changed_when: True
+    notify:
+      - Restart Observe Agent Service
 
-    - name: Gather facts
-      setup:
+  # Gather facts about the target host.
+  - name: Gather facts
+    setup:
+    changed_when: True
 
-    - name: Create backup of current configuration
-      copy:
-        src: "{{ item.src }}"
-        dest: "{{ item.dest }}.backup-{{ ansible_date_time.date }}"
-        remote_src: yes
-      loop:
-        - { src: "{{ observe_config_dir }}/otel-collector.yaml", dest: "{{ observe_config_dir }}/otel-collector.yaml" }
-        - { src: "{{ observe_logs_dir }}/logs.yaml", dest: "{{ observe_logs_dir }}/logs.yaml" }
-      when: service_stop is success
-      ignore_errors: yes
+  # Copy the custom otel-collector configuration file for Ubuntu 24.04.
+  - name: Copy custom otel-collector.yaml for Ubuntu 24.04
+    copy:
+      src: "{{ role_path }}/files/observe/{{ os_version }}-otel-collector.yaml"
+      dest: /etc/observe-agent/otel-collector.yaml
+      owner: root
+      group: root
+      mode: '0644'
+    when:
+      - ansible_os_family == 'Debian'
+      - os_version == '24.04'
+    changed_when: True
+    notify:
+      - Restart Observe Agent Service
 
-    - name: Copy otel-collector configuration
-      copy:
-        src: "{{ role_path }}/files/observe/{% if os_version == '24.04' %}{{ os_version }}-{% endif %}otel-collector.yaml"
-        dest: "{{ observe_config_dir }}/otel-collector.yaml"
-        owner: "{{ file_owner }}"
-        group: "{{ file_group }}"
-        mode: "{{ file_mode }}"
-        validate: 'python -c "import yaml; yaml.safe_load(open(\"%s\", \"r\").read())"'
-      when: ansible_os_family == 'Debian'
-      register: otel_config
+  # Copy the custom logs configuration file for Ubuntu 24.04.
+  - name: Copy custom logs.yaml for Ubuntu 24.04
+    copy:
+      src: "{{ role_path }}/files/observe/{{ os_version }}-logs.yaml"
+      dest: /etc/observe-agent/connections/host_monitoring/logs.yaml
+      owner: root
+      group: root
+      mode: '0644'
+    when:
+      - ansible_os_family == 'Debian'
+      - os_version == '24.04'
+    changed_when: True
+    notify:
+      - Restart Observe Agent Service
 
-    - name: Copy logs configuration
-      copy:
-        src: "{{ role_path }}/files/observe/{% if os_version == '24.04' %}{{ os_version }}-{% endif %}logs.yaml"
-        dest: "{{ observe_logs_dir }}/logs.yaml"
-        owner: "{{ file_owner }}"
-        group: "{{ file_group }}"
-        mode: "{{ file_mode }}"
-        validate: 'python -c "import yaml; yaml.safe_load(open(\"%s\", \"r\").read())"'
-      when: ansible_os_family == 'Debian'
-      register: logs_config
+  # Copy the default otel-collector configuration file for other OS versions.
+  - name: Copy default otel-collector.yaml for other OS versions
+    copy:
+      src: "{{ role_path }}/files/observe/otel-collector.yaml"
+      dest: /etc/observe-agent/otel-collector.yaml
+      owner: root
+      group: root
+      mode: '0644'
+    when:
+      - ansible_os_family == 'Debian'
+      - os_version != '24.04'
+    changed_when: True
+    notify:
+      - Restart Observe Agent Service
 
-    - name: Start and enable observe-agent service
-      systemd:
-        name: "{{ observe_agent_service }}"
-        state: started
-        enabled: yes
-        daemon_reload: yes
-      register: service_start
+  # Copy the default logs configuration file for other OS versions.
+  - name: Copy default logs.yaml for other OS versions
+    copy:
+      src: "{{ role_path }}/files/observe/logs.yaml"
+      dest: /etc/observe-agent/connections/host_monitoring/logs.yaml
+      owner: root
+      group: root
+      mode: '0644'
+    when:
+      - ansible_os_family == 'Debian'
+      - os_version != '24.04'
+    changed_when: True
+    notify:
+      - Restart Observe Agent Service
 
-    - name: Verify service is running
-      systemd:
-        name: "{{ observe_agent_service }}"
-      register: service_status
-      failed_when: service_status.status.ActiveState != "active"
+  # Restart the observe-agent service to apply the new configurations.
+  - name: Restart Observe Agent Service
+    service:
+      name: observe-agent
+      state: restarted
+    changed_when: True
 
-    - name: Show service status
-      debug:
-        msg: "Observe agent service status: {{ service_status.status.ActiveState }}"
+  # Ensure the observe-agent service is running and enabled to start at boot.
+  - name: Ensure observe-agent service is running and enabled
+    ansible.builtin.systemd:
+      name: observe-agent
+      state: started
+      enabled: yes
+    changed_when: True
 
-  handlers:
-    - name: Restore configuration backup on failure
-      copy:
-        src: "{{ item }}.backup-{{ ansible_date_time.date }}"
-        dest: "{{ item }}"
-        remote_src: yes
-      loop:
-        - "{{ observe_config_dir }}/otel-collector.yaml"
-        - "{{ observe_logs_dir }}/logs.yaml"
-      when: (otel_config.failed is defined and otel_config.failed) or 
-            (logs_config.failed is defined and logs_config.failed) or
-            (service_start.failed is defined and service_start.failed)
-      ignore_errors: yes

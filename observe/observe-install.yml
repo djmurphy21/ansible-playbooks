@@ -1,32 +1,32 @@
 ---
-# Synopsis:
-# This Ansible playbook automates the installation and configuration of the Observe agent on all specified hosts.
-# It ensures the agent is properly set up to monitor the host system and send telemetry data to the Observe platform.
+# Updated Synopsis:
+# This Ansible playbook streamlines the deployment and management of the Observe agent on specified hosts.
+# It ensures the agent is correctly installed, configured, and operational to provide comprehensive system telemetry to the Observe platform.
 
-# Description:
-# The playbook performs the following tasks:
-# 1. Add Observe Repository: Adds the Observe repository to the system's package manager to allow installation of the Observe agent.
-# 2. Update Apt Cache: Updates the package manager's cache to include the newly added repository.
-# 3. Install Observe Agent: Installs the Observe agent package from the repository.
-# 4. Copy Custom Configuration: Copies custom configurations for otel-collector.yaml and logs.yaml to appropriate directories on the host.
-# 5. Initialize Configuration: Initializes the Observe agent configuration using provided tokens and URLs, enabling various monitoring features.
-# 6. Remove Specific Log File Inclusions: Removes specific log file inclusions from the Observe agent configuration.
-# 7. Remove Syslog Inclusion: Removes syslog inclusion from the Observe agent configuration.
-# 8. Start and Enable Service: Starts the Observe agent service and ensures it is enabled to start on boot.
-# 9. Pin Observe Agent Version: Pins the Observe agent version to prevent automatic updates.
+# Updated Description:
+# This playbook executes the following steps:
+# 1. Add Observe Repository: Configures the system to access the Observe package repository.
+# 2. Update Package Cache: Refreshes the system's package manager cache after adding the repository.
+# 3. Install Observe Agent: Deploys the latest version of the Observe agent from the repository.
+# 4. Prepare Directories: Creates required directories for configuration and logs with appropriate permissions.
+# 5. Backup Existing Configuration: Safeguards existing configuration files before making changes.
+# 6. Apply Custom Configuration: Transfers custom otel-collector and log configuration files to the target system.
+# 7. Initialize Observe Configuration: Sets up the Observe agent with provided credentials and feature toggles.
+# 8. Configure Log Exclusions: Excludes specific logs from being monitored or collected.
+# 9. Manage Agent Service: Starts and enables the Observe agent service to ensure it runs on system boot.
+# 10. Pin Agent Version: Prevents unintended upgrades of the Observe agent by locking its version.
 
-# Notes:
-# - Variables: The playbook uses variables defined in an external file specified by `vars_file`. Ensure this file contains necessary variables such as `token` and `url`.
-# - Permissions: The playbook requires elevated privileges (`become: yes`) to perform tasks such as adding repositories, installing packages, and modifying system files.
-# - Custom Configuration: The custom `otel-collector.yaml` and `logs.yaml` files should be prepared and placed in specified source paths before running the playbook.
-# - Service Management: The playbook uses the `systemd` module to manage the Observe agent service, ensuring it is started and enabled to run on system boot.
+# Updated Notes:
+# - Variable Management: Ensure the external `vars_file` contains mandatory variables (`observe_token` and `observe_url`).
+# - System Requirements: The playbook requires elevated privileges (`become: yes`) to execute system-level changes.
+# - Configuration Files: Place customized `otel-collector.yaml` and `logs.yaml` files in the specified paths before execution.
+# - Service Reliability: The `systemd` module ensures the Observe agent service is persistently active and enabled.
+# - Error Handling: Includes measures to back up and restore configurations to mitigate risks during deployment.
 
-# Example:
-# To run this playbook, use the following command:
+# Example Usage:
+# To execute the playbook:
 # ansible-playbook -i <inventory_file> <playbook.yml> --extra-vars "vars_file=<path_to_vars_file>" --limit <hostname_or_group_name>
-#
-# Replace `<inventory_file>` with the path to your inventory file, `<playbook.yml>` with the name of this playbook file,
-# `<path_to_vars_file>` with the path to your variables file, `<hostname_or_group_name>` with the target hostname or group name.
+# Replace placeholders as needed for your environment.
 
 - name: Install and Configure Observe Agent
   hosts: all
@@ -36,12 +36,18 @@
     - "{{ vars_file }}"
 
   vars:
+    # The URL of the Observe repository to add to the system's package manager
     observe_repo_url: "https://repo.observeinc.com/apt/"
+    # The name of the Observe agent service to manage
     observe_agent_service: observe-agent
+    # The directory where the Observe agent configuration files are stored
     observe_config_dir: /etc/observe-agent
+    # The directory where the Observe agent logs configuration files are stored
     observe_logs_dir: "{{ observe_config_dir }}/connections/host_monitoring"
+    # The owner and group of the configuration files to be created
     file_owner: root
     file_group: root
+    # The permissions of the configuration files to be created
     file_mode: '0644'
 
   pre_tasks:
@@ -65,6 +71,9 @@
   tasks:
     - name: Gather facts
       setup:
+      debug:
+        msg: "Gathered facts successfully."
+      changed_when: False
 
     - name: Add Observe repository
       apt_repository:
@@ -72,17 +81,26 @@
         state: present
         filename: observeinc
       register: repo_add
+      debug:
+        msg: "Added Observe repository."
+      changed_when: repo_add is changed
 
     - name: Update apt cache
       apt:
         update_cache: yes
       when: repo_add is changed
+      debug:
+        msg: "Updated apt cache."
+      changed_when: False
 
     - name: Install Observe agent
       apt:
         name: "{{ observe_agent_service }}"
         state: present
       register: install_status
+      debug:
+        msg: "Installed Observe agent."
+      changed_when: install_status is changed
 
     - name: Create required directories
       file:
@@ -94,6 +112,9 @@
       loop:
         - "{{ observe_config_dir }}"
         - "{{ observe_logs_dir }}"
+      debug:
+        msg: "Created required directories."
+      changed_when: False
 
     - name: Backup existing configuration files
       copy:
@@ -105,6 +126,9 @@
         - "{{ observe_logs_dir }}/logs.yaml"
       ignore_errors: yes
       when: install_status is changed
+      debug:
+        msg: "Backed up existing configuration files."
+      changed_when: False
 
     - name: Copy configuration files
       copy:
@@ -119,6 +143,9 @@
         - { name: "logs.yaml", dest: "{{ observe_logs_dir }}/logs.yaml" }
       when: ansible_os_family == 'Debian'
       register: config_copy
+      debug:
+        msg: "Copied configuration files."
+      changed_when: config_copy is changed
 
     - name: Initialize Observe agent configuration
       command: observe-agent init-config
@@ -133,6 +160,8 @@
       changed_when: init_config.rc == 0
       failed_when: init_config.rc != 0
       no_log: true  # Hide sensitive token information from logs
+      debug:
+        msg: "Initialized Observe agent configuration."
 
     - name: Configure log exclusions
       blockinfile:
@@ -144,6 +173,10 @@
             - pattern: '/var/log/.*/.*\.log'
             - pattern: '/var/log/syslog'
         backup: yes
+      register: config_block
+      debug:
+        msg: "Configured log exclusions."
+      changed_when: config_block is changed
 
     - name: Start and enable Observe agent service
       systemd:
@@ -152,22 +185,32 @@
         enabled: yes
         daemon_reload: yes
       register: service_status
+      debug:
+        msg: "Started and enabled Observe agent service."
+      changed_when: service_status is changed
 
     - name: Verify service is running
       systemd:
         name: "{{ observe_agent_service }}"
       register: service_check
       failed_when: service_check.status.ActiveState != "active"
+      debug:
+        msg: "Verified service is running."
+      changed_when: False
 
     - name: Pin Observe Agent Version
       dpkg_selections:
         name: "{{ observe_agent_service }}"
         selection: hold
       register: pin_status
+      debug:
+        msg: "Pinned Observe agent version."
+      changed_when: pin_status is changed
 
     - name: Show installation status
       debug:
         msg: "Observe agent installation completed successfully. Service status: {{ service_check.status.ActiveState }}"
+      changed_when: False
 
   handlers:
     - name: Restore configuration on failure
@@ -182,3 +225,5 @@
             (init_config.failed is defined and init_config.failed) or
             (service_status.failed is defined and service_status.failed)
       ignore_errors: yes
+      debug:
+        msg: "Restored configuration files on failure."
